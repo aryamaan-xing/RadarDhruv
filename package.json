@@ -4,12 +4,13 @@
   "sideEffects": false,
   "type": "module",
   "scripts": {
-    "dev": "node ./node_modules/vite/bin/vite.js dev",
-    "build": "node ./node_modules/vite/bin/vite.js build",
-    "build:dev": "node ./node_modules/vite/bin/vite.js build --mode development",
-    "preview": "node ./node_modules/vite/bin/vite.js preview",
-    "lint": "node ./node_modules/eslint/bin/eslint.js src vite.config.ts eslint.config.js",
-    "format": "node ./node_modules/prettier/bin/prettier.cjs --write src vite.config.ts eslint.config.js package.json"
+    "dev": "node ./node_modules/vite/bin/vite.js dev --config vite.static.config.ts",
+    "build": "node ./node_modules/vite/bin/vite.js build --config vite.static.config.ts",
+    "build:ssr": "node ./node_modules/vite/bin/vite.js build",
+    "build:dev": "node ./node_modules/vite/bin/vite.js build --config vite.static.config.ts --mode development",
+    "preview": "node ./node_modules/vite/bin/vite.js preview --config vite.static.config.ts",
+    "lint": "node ./node_modules/eslint/bin/eslint.js src vite.config.ts vite.static.config.ts eslint.config.js",
+    "format": "node ./node_modules/prettier/bin/prettier.cjs --write src vite.config.ts vite.static.config.ts eslint.config.js package.json index.html"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.25.5",
