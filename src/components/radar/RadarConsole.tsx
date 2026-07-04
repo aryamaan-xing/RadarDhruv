@@ -49,6 +49,7 @@ export function RadarConsole() {
   const [cursor, setCursor] = useState({ x: 0, y: 0 });
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [leftPanelOpen, setLeftPanelOpen] = useState(false);
   const [actions, setActions] = useState<TraineeAction[]>([]);
   const selected =
     contacts.find((contact) => contact.id === selectedId) ?? null;
@@ -279,12 +280,23 @@ export function RadarConsole() {
         onNewScenario={newScenario}
       />
       <div className="flex h-[calc(100vh-44px)] min-h-[620px] w-full">
-        <LeftRail
-          scenario={displayScenario}
-          contacts={contacts}
-          settings={settings}
-          selectedId={selectedId}
-        />
+        {leftPanelOpen ? (
+          <LeftRail
+            scenario={displayScenario}
+            contacts={contacts}
+            settings={settings}
+            selectedId={selectedId}
+            onCollapse={() => setLeftPanelOpen(false)}
+          />
+        ) : (
+          <button
+            onClick={() => setLeftPanelOpen(true)}
+            className="flex w-7 items-center justify-center border-r border-[#39413a] bg-[#080d0b] text-[10px] tracking-widest text-[#7fffae] hover:bg-[#0d1712]"
+            title="Show left panel"
+          >
+            &gt;
+          </button>
+        )}
         <main
           ref={wrapRef}
           className="relative flex flex-1 items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_center,#041208_0%,#010402_70%,#000_100%)]"
@@ -383,11 +395,13 @@ function LeftRail({
   contacts,
   settings,
   selectedId,
+  onCollapse,
 }: {
   scenario: Scenario;
   contacts: Contact[];
   settings: RadarSettings;
   selectedId: string | null;
+  onCollapse: () => void;
 }) {
   const live = contacts.filter((contact) => !contact.dropped);
   const ais = live.filter((contact) => contact.aisActive).length;
@@ -401,6 +415,16 @@ function LeftRail({
 
   return (
     <aside className="flex w-56 flex-col gap-3 border-r border-[#39413a] bg-[#080d0b] p-3 text-[10px] text-[#d8e978]">
+      <div className="flex items-center justify-between border-b border-[#1b2c22] pb-1 tracking-widest text-[#7fffae]">
+        <span>INFO</span>
+        <button
+          onClick={onCollapse}
+          className="border border-[#1f6b3a] px-1 text-[#7fffae] hover:bg-[#04200f]"
+          title="Hide left panel"
+        >
+          &lt;
+        </button>
+      </div>
       <Section title="OBJECTIVE">
         <p className="leading-relaxed text-[#7fffae]">{scenario.objective}</p>
       </Section>
