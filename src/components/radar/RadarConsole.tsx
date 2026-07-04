@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { RadarScope } from "./RadarScope";
-import { assessContacts } from "@/sim/assessmentEngine";
 import {
   advanceContacts,
   createInitialScenario,
@@ -18,7 +17,6 @@ import {
   screenToBearingRange,
 } from "@/sim/math";
 import type {
-  AssessmentSummary,
   Contact,
   RadarSettings,
   Scenario,
@@ -28,11 +26,6 @@ import type {
 
 const TIME_SCALE = 180;
 const DEFAULT_SIZE = 720;
-
-interface LogEntry {
-  t: string;
-  msg: string;
-}
 
 export function RadarConsole() {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -44,6 +37,9 @@ export function RadarConsole() {
   const tracksRef = useRef<Map<string, SensorTrack>>(new Map());
   const [scenario, setScenario] = useState(() => createInitialScenario());
   const [contacts, setContacts] = useState<Contact[]>(() => scenario.contacts);
+  const [ownHeadingDeg, setOwnHeadingDeg] = useState(
+    scenario.ownShip.headingDeg,
+  );
   const [settings, setSettings] = useState<RadarSettings>(
     DEFAULT_RADAR_SETTINGS,
   );
@@ -54,18 +50,15 @@ export function RadarConsole() {
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [actions, setActions] = useState<TraineeAction[]>([]);
-  const [debriefOpen, setDebriefOpen] = useState(false);
-  const [log, setLog] = useState<LogEntry[]>([
-    { t: "0000Z", msg: "TRAINER READY  PUBLIC-SOURCE PROCEDURAL MODEL" },
-    { t: "0000Z", msg: "SURFACE SEARCH  270 DEG SECTOR  80NM" },
-  ]);
-
-  const assessment = useMemo(
-    () => assessContacts(contacts, actions),
-    [contacts, actions],
-  );
   const selected =
     contacts.find((contact) => contact.id === selectedId) ?? null;
+  const displayScenario = useMemo(
+    () => ({
+      ...scenario,
+      ownShip: { ...scenario.ownShip, headingDeg: ownHeadingDeg },
+    }),
+    [scenario, ownHeadingDeg],
+  );
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -74,10 +67,6 @@ export function RadarConsole() {
   useEffect(() => {
     scenarioRef.current = scenario;
   }, [scenario]);
-
-  const appendLog = useCallback((msg: string) => {
-    setLog((current) => [...current.slice(-48), { t: zulu(), msg }]);
-  }, []);
 
   const recordAction = useCallback(
     (contactId: string, action: TraineeAction["action"]) => {
@@ -96,6 +85,7 @@ export function RadarConsole() {
     lastFrameRef.current = 0;
     setScenario(next);
     scenarioRef.current = next;
+    setOwnHeadingDeg(next.ownShip.headingDeg);
     setContacts(next.contacts);
     const initialTracks = detectContacts(
       next,
@@ -111,11 +101,7 @@ export function RadarConsole() {
     setSelectedId(null);
     setHoverId(null);
     setActions([]);
-    setDebriefOpen(false);
-    appendLog(
-      `NEW ${next.id}  ${next.weather}  SEA ${next.seaState}  ${next.contacts.length} CONTACTS`,
-    );
-  }, [appendLog]);
+  }, []);
 
   useEffect(() => {
     const update = () => {
@@ -150,6 +136,7 @@ export function RadarConsole() {
           current,
           dtSim,
           scenarioSecondsRef.current,
+          currentScenario,
         );
         const detected = detectContacts(
           currentScenario,
@@ -177,6 +164,10 @@ export function RadarConsole() {
 
   const selectContact = useCallback(
     (contactId: string | null) => {
+      if (!settingsRef.current.transmitting) {
+        setSelectedId(null);
+        return;
+      }
       if (!contactId) {
         setSelectedId(null);
         return;
@@ -197,10 +188,16 @@ export function RadarConsole() {
             : contact,
         ),
       );
-      appendLog(`TRACK ${contactId} DESIGNATED`);
     },
-    [appendLog, recordAction],
+    [recordAction],
   );
+
+  useEffect(() => {
+    if (!settings.transmitting) {
+      setSelectedId(null);
+      setHoverId(null);
+    }
+  }, [settings.transmitting]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -213,7 +210,8 @@ export function RadarConsole() {
         setCursor((current) => ({ ...current, x: current.x - step }));
       else if (event.key === "ArrowRight")
         setCursor((current) => ({ ...current, x: current.x + step }));
-      else if (event.key === "Enter" && hoverId) selectContact(hoverId);
+      else if (event.key === "Enter" && hoverId && settings.transmitting)
+        selectContact(hoverId);
       else if (event.key === "Escape") setSelectedId(null);
       else return;
       event.preventDefault();
@@ -237,12 +235,8 @@ export function RadarConsole() {
     recordAction(selected.id, action);
 
     if (action === "EO_VERIFY") {
-      appendLog(`EO SLEW REQUEST  ${selected.id}`);
       const result = runEO(selected, scenario, scenarioSecondsRef.current);
       updateContact(selected.id, { classification: "EO_ID", eoResult: result });
-      appendLog(
-        `${selected.id} EO ${result.status}  CONF ${(result.confidence * 100).toFixed(0)}%`,
-      );
       return;
     }
 
@@ -251,7 +245,6 @@ export function RadarConsole() {
         classification: "ANOMALOUS",
         flaggedAtSeconds: scenarioSecondsRef.current,
       });
-      appendLog(`${selected.id} FLAGGED ANOMALOUS`);
       return;
     }
 
@@ -262,13 +255,11 @@ export function RadarConsole() {
             ? "TRACKED"
             : selected.classification,
       });
-      appendLog(`${selected.id} RETAINED FOR MONITORING`);
       return;
     }
 
     updateContact(selected.id, { dropped: true });
     setSelectedId(null);
-    appendLog(`${selected.id} TRACK DROPPED BY TRAINEE`);
   };
 
   return (
@@ -283,15 +274,15 @@ export function RadarConsole() {
         scenarioTitle={scenario.title}
         contacts={contacts}
         settings={settings}
+        ownHeadingDeg={ownHeadingDeg}
         sweepDeg={sweepDeg}
         onNewScenario={newScenario}
       />
       <div className="flex h-[calc(100vh-44px)] min-h-[620px] w-full">
         <LeftRail
-          scenario={scenario}
+          scenario={displayScenario}
           contacts={contacts}
           settings={settings}
-          assessment={assessment}
           selectedId={selectedId}
         />
         <main
@@ -299,7 +290,7 @@ export function RadarConsole() {
           className="relative flex flex-1 items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_center,#041208_0%,#010402_70%,#000_100%)]"
         >
           <RadarScope
-            scenario={scenario}
+            scenario={displayScenario}
             contacts={contacts}
             tracks={tracks}
             settings={settings}
@@ -323,20 +314,13 @@ export function RadarConsole() {
           <Controls
             settings={settings}
             setSettings={setSettings}
+            ownHeadingDeg={ownHeadingDeg}
+            setOwnHeadingDeg={setOwnHeadingDeg}
             cursor={cursor}
             rangeNm={settings.rangeNm}
             radius={size / 2 - 34}
-            onDebrief={() => setDebriefOpen(true)}
           />
-          {debriefOpen && (
-            <Debrief
-              assessment={assessment}
-              contacts={contacts}
-              onClose={() => setDebriefOpen(false)}
-            />
-          )}
         </main>
-        <LogPane log={log} />
       </div>
     </div>
   );
@@ -347,6 +331,7 @@ function TopBar({
   scenarioTitle,
   contacts,
   settings,
+  ownHeadingDeg,
   sweepDeg,
   onNewScenario,
 }: {
@@ -354,6 +339,7 @@ function TopBar({
   scenarioTitle: string;
   contacts: Contact[];
   settings: RadarSettings;
+  ownHeadingDeg: number;
   sweepDeg: number;
   onNewScenario: () => void;
 }) {
@@ -365,13 +351,15 @@ function TopBar({
   }, []);
 
   return (
-    <header className="flex h-11 items-center gap-5 border-b border-[#0a2814] bg-[#03110a] px-4 text-[11px] tracking-widest text-[#5fcf8a]">
+    <header className="flex h-11 items-center gap-5 border-b border-[#39413a] bg-[#101412] px-4 text-[11px] tracking-widest text-[#d8e978]">
       <span className="text-[#7fffae]">
         ALH COPILOT TRAINER // SURFACE SEARCH
       </span>
       <Stat k="ID" v={scenarioId.replace("SCN-", "")} />
       <Stat k="SCN" v={scenarioTitle.toUpperCase()} />
+      <Stat k="AIS" v={settings.transmitting ? "ON" : "OFF"} />
       <Stat k="MODE" v={settings.mode.replace("_", " ")} />
+      <Stat k="HDG" v={`${formatHeading(ownHeadingDeg)} DEG`} />
       <Stat k="RNG" v={`${settings.rangeNm}NM`} />
       <Stat k="SECTOR" v={`${settings.sectorWidthDeg} DEG`} />
       <Stat k="SWP" v={`${padBearing(sweepDeg)} DEG`} />
@@ -394,36 +382,38 @@ function LeftRail({
   scenario,
   contacts,
   settings,
-  assessment,
   selectedId,
 }: {
   scenario: Scenario;
   contacts: Contact[];
   settings: RadarSettings;
-  assessment: AssessmentSummary;
   selectedId: string | null;
 }) {
   const live = contacts.filter((contact) => !contact.dropped);
   const ais = live.filter((contact) => contact.aisActive).length;
+  const silentPrimary = live.filter((contact) => !contact.aisActive).length;
+  const suspectMotion = live.filter(
+    (contact) => contact.motionAnalysis.riskLevel === "SUSPECT",
+  ).length;
   const anomalous = live.filter(
     (contact) => contact.classification === "ANOMALOUS",
   ).length;
 
   return (
-    <aside className="flex w-56 flex-col gap-3 border-r border-[#0a2814] bg-[#02100a] p-3 text-[10px] text-[#5fcf8a]">
+    <aside className="flex w-56 flex-col gap-3 border-r border-[#39413a] bg-[#080d0b] p-3 text-[10px] text-[#d8e978]">
       <Section title="OBJECTIVE">
         <p className="leading-relaxed text-[#7fffae]">{scenario.objective}</p>
       </Section>
       <Section title="OWN SHIP">
         <Row k="LAT" v={scenario.ownShip.lat} />
         <Row k="LON" v={scenario.ownShip.lon} />
-        <Row k="HDG" v={`${scenario.ownShip.headingDeg} DEG`} />
+        <Row k="HDG" v={`${formatHeading(scenario.ownShip.headingDeg)} DEG`} />
         <Row k="SPD" v={`${scenario.ownShip.speedKts} KT`} />
         <Row k="ALT" v={`${scenario.ownShip.altitudeFt} FT`} />
       </Section>
       <Section title="SENSORS">
         <Row k="RDR" v="ON" ok />
-        <Row k="AIS" v="RX" ok />
+        <Row k="AIS" v={settings.transmitting ? "ON" : "OFF"} ok={settings.transmitting} warn={!settings.transmitting} />
         <Row k="EO/IR" v="STBY" />
         <Row k="IFF" v="MK XII" />
       </Section>
@@ -435,29 +425,12 @@ function LeftRail({
       <Section title="PICTURE">
         <Row k="CONT" v={String(live.length).padStart(2, "0")} />
         <Row k="AIS" v={String(ais).padStart(2, "0")} />
-        <Row k="DARK" v={String(live.length - ais).padStart(2, "0")} />
+        <Row k="NO AIS" v={String(silentPrimary).padStart(2, "0")} warn={silentPrimary > 0} />
+        <Row k="MOTION" v={String(suspectMotion).padStart(2, "0")} warn={suspectMotion > 0} />
         <Row
           k="ANOM"
           v={String(anomalous).padStart(2, "0")}
           warn={anomalous > 0}
-        />
-      </Section>
-      <Section title="ASSESSMENT">
-        <Row k="DETECT" v={String(assessment.detected).padStart(2, "0")} />
-        <Row
-          k="CORRECT"
-          v={String(assessment.flaggedCorrectly).padStart(2, "0")}
-          ok
-        />
-        <Row
-          k="FALSE"
-          v={String(assessment.falsePositives).padStart(2, "0")}
-          warn={assessment.falsePositives > 0}
-        />
-        <Row
-          k="MISSED"
-          v={String(assessment.missedSuspicious).padStart(2, "0")}
-          warn={assessment.missedSuspicious > 0}
         />
       </Section>
       <Section title="DESIG">
@@ -514,6 +487,16 @@ function TrackPanel({
           warn={!contact.aisActive}
         />
         <Data k="REP" v={contact.aisReportedKind ?? "---"} />
+        <Data
+          k="RISK"
+          v={`${contact.motionAnalysis.riskLevel} ${contact.motionAnalysis.riskScore}`}
+          warn={contact.motionAnalysis.riskLevel !== "LOW"}
+        />
+        <Data
+          k="HDG Δ"
+          v={`${contact.motionAnalysis.headingChangeDeg.toFixed(1)} DEG`}
+          warn={contact.motionAnalysis.headingChangeDeg > 1.2}
+        />
         <Data k="CLS" v={contact.classification} />
         <Data
           k="RDR"
@@ -521,9 +504,27 @@ function TrackPanel({
           warn={track?.cluttered}
         />
       </div>
+      {contact.aisMetadata && (
+        <div className="border-t border-[#0e3a20] px-2 py-2">
+          <div className="mb-1 text-[#2f7a4e]">AIS DATA</div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+            <Data k="MMSI" v={contact.aisMetadata.mmsi} />
+            <Data k="NAME" v={contact.aisMetadata.vesselName} />
+            <Data k="FLAG" v={contact.aisMetadata.nationality} />
+            <Data k="REG" v={contact.aisMetadata.registryCountry} />
+            <Data k="LAST" v={contact.aisMetadata.lastPort} />
+            <Data k="NEXT" v={contact.aisMetadata.nextPort} />
+            <Data k="CARGO" v={contact.aisMetadata.cargo} />
+            <Data
+              k="DIM"
+              v={`${contact.aisMetadata.lengthM}x${contact.aisMetadata.beamM}M`}
+            />
+          </div>
+        </div>
+      )}
       <div className="border-t border-[#0e3a20] px-2 py-2">
-        <div className="mb-1 text-[#2f7a4e]">OBSERVABLE EVIDENCE</div>
-        {contact.evidence.map((item) => (
+        <div className="mb-1 text-[#2f7a4e]">MOTION / AIS ANALYSIS</div>
+        {contact.motionAnalysis.reasons.map((item) => (
           <div key={item} className="leading-relaxed">
             - {item}
           </div>
@@ -557,17 +558,19 @@ function TrackPanel({
 function Controls({
   settings,
   setSettings,
+  ownHeadingDeg,
+  setOwnHeadingDeg,
   cursor,
   rangeNm,
   radius,
-  onDebrief,
 }: {
   settings: RadarSettings;
   setSettings: Dispatch<SetStateAction<RadarSettings>>;
+  ownHeadingDeg: number;
+  setOwnHeadingDeg: Dispatch<SetStateAction<number>>;
   cursor: { x: number; y: number };
   rangeNm: number;
   radius: number;
-  onDebrief: () => void;
 }) {
   const br = screenToBearingRange(cursor.x, cursor.y, rangeNm, radius);
   const patch = (next: Partial<RadarSettings>) =>
@@ -580,6 +583,16 @@ function Controls({
           <span className="text-[#2f7a4e]">TRKBALL </span>B
           {padBearing(br.bearingDeg)} R{br.rangeNm.toFixed(1)}NM
         </span>
+        <button
+          onClick={() => patch({ transmitting: !settings.transmitting })}
+          className={`border px-2 py-0.5 ${
+            settings.transmitting
+              ? "border-[#7fffae] text-[#7fffae]"
+              : "border-[#ffb347] text-[#ffb347]"
+          }`}
+        >
+          AIS {settings.transmitting ? "ON" : "OFF"}
+        </button>
         <SelectNumber
           label="RNG"
           value={settings.rangeNm}
@@ -592,32 +605,7 @@ function Controls({
           options={[60, 120, 180, 270, 360]}
           onChange={(sectorWidthDeg) => patch({ sectorWidthDeg })}
         />
-        <SelectNumber
-          label="CENTER"
-          value={settings.sectorCenterDeg}
-          options={[0, 45, 90, 135, 180, 225, 270, 315]}
-          onChange={(sectorCenterDeg) => patch({ sectorCenterDeg })}
-        />
-        <Slider
-          label="GAIN"
-          value={settings.gain}
-          onChange={(gain) => patch({ gain })}
-        />
-        <Slider
-          label="SEA"
-          value={settings.seaClutter}
-          onChange={(seaClutter) => patch({ seaClutter })}
-        />
-        <Slider
-          label="RAIN"
-          value={settings.rainClutter}
-          onChange={(rainClutter) => patch({ rainClutter })}
-        />
-        <Slider
-          label="STC"
-          value={settings.stc}
-          onChange={(stc) => patch({ stc })}
-        />
+        <HeadingInput value={ownHeadingDeg} onChange={setOwnHeadingDeg} />
         <select
           value={settings.mode}
           onChange={(event) =>
@@ -635,88 +623,8 @@ function Controls({
         >
           FTC {settings.ftc ? "ON" : "OFF"}
         </button>
-        <button
-          onClick={onDebrief}
-          className="ml-auto border border-[#1f6b3a] px-2 text-[#ffb347]"
-        >
-          [ DEBRIEF ]
-        </button>
       </div>
     </div>
-  );
-}
-
-function Debrief({
-  assessment,
-  contacts,
-  onClose,
-}: {
-  assessment: AssessmentSummary;
-  contacts: Contact[];
-  onClose: () => void;
-}) {
-  const notable = assessment.items
-    .filter((item) => item.outcome !== "INSUFFICIENT")
-    .slice(0, 10);
-  return (
-    <div className="absolute inset-8 overflow-auto border border-[#1f6b3a] bg-[rgba(1,8,4,0.97)] p-4 text-[11px] text-[#7fffae]">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-sm tracking-widest">TRAINING DEBRIEF</h2>
-        <button onClick={onClose} className="border border-[#1f6b3a] px-2">
-          CLOSE
-        </button>
-      </div>
-      <div className="grid grid-cols-5 gap-2">
-        <Metric k="DETECTED" v={assessment.detected} />
-        <Metric k="CORRECT FLAGS" v={assessment.flaggedCorrectly} />
-        <Metric k="FALSE POS" v={assessment.falsePositives} />
-        <Metric k="MISSED" v={assessment.missedSuspicious} />
-        <Metric
-          k="LIVE CONTACTS"
-          v={contacts.filter((contact) => !contact.dropped).length}
-        />
-      </div>
-      <div className="mt-4 text-[#2f7a4e]">EVIDENCE REVIEW</div>
-      <div className="mt-2 grid gap-2">
-        {notable.map((item) => (
-          <div key={item.contactId} className="border border-[#0e3a20] p-2">
-            <div className="mb-1 text-[#ffb347]">
-              {item.contactId} // {item.outcome} // TRAINEE{" "}
-              {item.traineeDecision} // TRUTH {item.groundTruth}
-            </div>
-            {item.rationale.map((line) => (
-              <div key={line}>- {line}</div>
-            ))}
-          </div>
-        ))}
-        {notable.length === 0 && (
-          <div>
-            No decisive training events yet. Continue the sortie and flag
-            contacts only when evidence supports escalation.
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function LogPane({ log }: { log: LogEntry[] }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
-  }, [log]);
-  return (
-    <aside className="flex w-72 flex-col border-l border-[#0a2814] bg-[#02100a] p-3 text-[10px] text-[#5fcf8a]">
-      <div className="mb-2 tracking-widest text-[#2f7a4e]">OPS LOG</div>
-      <div ref={ref} className="flex-1 overflow-auto leading-relaxed">
-        {log.map((entry, i) => (
-          <div key={`${entry.t}-${i}`}>
-            <span className="text-[#2f7a4e]">{entry.t} </span>
-            {entry.msg}
-          </div>
-        ))}
-      </div>
-    </aside>
   );
 }
 
@@ -745,7 +653,7 @@ function Row({
       <span className="text-[#2f7a4e]">{k}</span>
       <span
         className={
-          warn ? "text-[#ffb347]" : ok ? "text-[#7fffae]" : "text-[#5fcf8a]"
+          warn ? "text-[#ffb347]" : ok ? "text-[#7fffae]" : "text-[#d8e978]"
         }
       >
         {v}
@@ -789,27 +697,36 @@ function OpButton({
   );
 }
 
-function Slider({
-  label,
+function HeadingInput({
   value,
   onChange,
 }: {
-  label: string;
   value: number;
   onChange: (value: number) => void;
 }) {
   return (
     <label className="flex items-center gap-1 text-[#2f7a4e]">
-      {label}
+      HEADING
       <input
-        type="range"
-        min={0}
-        max={100}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-        className="w-16 accent-[#7fffae]"
+        type="number"
+        step={1}
+        value={Math.round(value)}
+        onChange={(event) => {
+          const next = Number(event.target.value);
+          if (!Number.isFinite(next)) return;
+          if (next < 0) {
+            onChange(360);
+            return;
+          }
+          if (next > 360) {
+            onChange(((next % 360) + 360) % 360);
+            return;
+          }
+          onChange(next);
+        }}
+        className="w-16 border border-[#0e3a20] bg-[#02100a] px-1 text-[#7fffae]"
       />
-      <span className="w-6 text-[#7fffae]">{Math.round(value)}</span>
+      <span className="text-[#7fffae]">DEG</span>
     </label>
   );
 }
@@ -843,21 +760,17 @@ function SelectNumber({
   );
 }
 
-function Metric({ k, v }: { k: string; v: number }) {
-  return (
-    <div className="border border-[#0e3a20] p-2">
-      <div className="text-[#2f7a4e]">{k}</div>
-      <div className="text-lg text-[#7fffae]">{v}</div>
-    </div>
-  );
-}
-
 function zulu(withSeconds = false) {
   const now = new Date();
   const hh = String(now.getUTCHours()).padStart(2, "0");
   const mm = String(now.getUTCMinutes()).padStart(2, "0");
   const ss = String(now.getUTCSeconds()).padStart(2, "0");
   return withSeconds ? `${hh}${mm}${ss}Z` : `${hh}${mm}Z`;
+}
+
+function formatHeading(value: number) {
+  const rounded = Math.round(value);
+  return rounded === 360 ? "360" : padBearing(rounded);
 }
 
 export default RadarConsole;

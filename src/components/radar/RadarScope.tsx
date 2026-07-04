@@ -15,6 +15,9 @@ import type {
 } from "@/sim/types";
 
 const ACQUISITION_GATE_PX = 30;
+const CONTACT_COLOR = "#ffb347";
+const TRACK_YELLOW = "#f4e84f";
+const RADAR_COVERAGE_HALF_DEG = 95;
 
 interface RadarScopeProps {
   scenario: Scenario;
@@ -46,24 +49,36 @@ export function RadarScope({
   onSelect,
 }: RadarScopeProps) {
   const radius = size / 2 - 34;
+  const ownHeadingDeg = scenario.ownShip.headingDeg;
   const visibleContacts = contacts.filter((contact) => {
     const track = tracks.get(contact.id);
-    return !contact.dropped && track?.visible;
+    return (
+      !contact.dropped &&
+      track?.visible &&
+      !isBehindBlindLine(contact.position, ownHeadingDeg)
+    );
   });
   const rings = ringScale(settings.rangeNm);
+  const portCoverageLimit = nmToScreen(
+    pointFromBearingRange(-RADAR_COVERAGE_HALF_DEG, 1),
+    1,
+    radius,
+  );
+  const starboardCoverageLimit = nmToScreen(
+    pointFromBearingRange(RADAR_COVERAGE_HALF_DEG, 1),
+    1,
+    radius,
+  );
   const cursorBR = screenToBearingRange(
     cursor.x,
     cursor.y,
     settings.rangeNm,
     radius,
   );
-  const clutter = useMemo(
-    () => makeClutter(scenario.seed, radius, settings, scenario),
-    [scenario, radius, settings],
-  );
   const nearestId = useMemo(
-    () => findNearest(cursor, visibleContacts, settings.rangeNm, radius),
-    [cursor, visibleContacts, settings.rangeNm, radius],
+    () =>
+      findNearest(cursor, visibleContacts, settings.rangeNm, radius, ownHeadingDeg),
+    [cursor, visibleContacts, settings.rangeNm, radius, ownHeadingDeg],
   );
 
   useEffect(() => {
@@ -81,6 +96,7 @@ export function RadarScope({
       visibleContacts,
       settings.rangeNm,
       radius,
+      ownHeadingDeg,
     );
     onCursor(clickCursor);
     onSelect(clickedId);
@@ -108,39 +124,15 @@ export function RadarScope({
       </defs>
 
       <circle r={radius + 13} fill="none" stroke="#0c2a18" strokeWidth={2} />
-      <circle r={radius} fill="#021008" stroke="#1d6a3c" strokeWidth={1.2} />
+      <circle r={radius} fill="#020907" stroke="#d9ded4" strokeWidth={1.1} />
 
       <g clipPath="url(#scopeClip)">
         <Coastline
           points={scenario.coastline}
           rangeNm={settings.rangeNm}
           radius={radius}
+          ownHeadingDeg={ownHeadingDeg}
         />
-        <ProtectedZones
-          scenario={scenario}
-          rangeNm={settings.rangeNm}
-          radius={radius}
-        />
-        <ShippingLanes
-          scenario={scenario}
-          rangeNm={settings.rangeNm}
-          radius={radius}
-        />
-        <Weather
-          scenario={scenario}
-          rangeNm={settings.rangeNm}
-          radius={radius}
-        />
-        {clutter.map((dot, i) => (
-          <circle
-            key={i}
-            cx={dot.x}
-            cy={dot.y}
-            r={dot.r}
-            fill="#6effa2"
-            opacity={dot.opacity}
-          />
-        ))}
       </g>
 
       {rings.map((nm) => {
@@ -150,12 +142,11 @@ export function RadarScope({
             <circle
               r={r}
               fill="none"
-              stroke="#0e6b3a"
-              strokeOpacity={0.5}
-              strokeDasharray="2 5"
-              strokeWidth={0.75}
+            stroke="#dce4d6"
+            strokeOpacity={0.68}
+            strokeWidth={1}
             />
-            <text x={5} y={-r - 3} fill="#3aa468" fontSize={9}>
+            <text x={5} y={-r - 3} fill="#dce4d6" fontSize={9}>
               {nm}NM
             </text>
           </g>
@@ -178,8 +169,8 @@ export function RadarScope({
             y1={a.y}
             x2={b.x}
             y2={b.y}
-            stroke="#1d6a3c"
-            strokeOpacity={i % 3 === 0 ? 0.9 : 0.45}
+            stroke="#dce4d6"
+            strokeOpacity={i % 3 === 0 ? 0.42 : 0.18}
           />
         );
       })}
@@ -196,7 +187,7 @@ export function RadarScope({
             key={deg}
             x={p.x}
             y={p.y + 3}
-            fill="#3aa468"
+            fill="#dce4d6"
             fontSize={9}
             textAnchor="middle"
           >
@@ -206,12 +197,22 @@ export function RadarScope({
       })}
 
       <line
-        x1={-radius}
+        x1={0}
         y1={0}
-        x2={radius}
-        y2={0}
-        stroke="#0e3a20"
-        strokeWidth={0.6}
+        x2={portCoverageLimit.x}
+        y2={portCoverageLimit.y}
+        stroke="#ff3842"
+        strokeOpacity={0.92}
+        strokeWidth={1.2}
+      />
+      <line
+        x1={0}
+        y1={0}
+        x2={starboardCoverageLimit.x}
+        y2={starboardCoverageLimit.y}
+        stroke="#ff3842"
+        strokeOpacity={0.92}
+        strokeWidth={1.2}
       />
       <line
         x1={0}
@@ -221,32 +222,6 @@ export function RadarScope({
         stroke="#0e3a20"
         strokeWidth={0.6}
       />
-      <SectorOverlay settings={settings} radius={radius} />
-
-      <g transform={`rotate(${sweepDeg - 90})`}>
-        <path
-          d={`M0,0 L${radius},0 A${radius},${radius} 0 0 0 ${radius * Math.cos((-24 * Math.PI) / 180)},${
-            radius * Math.sin((-24 * Math.PI) / 180)
-          } Z`}
-          fill="url(#sweepGrad)"
-        />
-        <path
-          d={`M0,0 L${radius},0 A${radius},${radius} 0 0 1 ${radius * Math.cos((7 * Math.PI) / 180)},${
-            radius * Math.sin((7 * Math.PI) / 180)
-          } Z`}
-          fill="#7fffae"
-          opacity={0.08}
-        />
-        <line
-          x1={0}
-          y1={0}
-          x2={radius}
-          y2={0}
-          stroke="#7fffae"
-          strokeOpacity={0.85}
-        />
-      </g>
-
       {visibleContacts.map((contact) => (
         <ContactSymbol
           key={contact.id}
@@ -256,9 +231,12 @@ export function RadarScope({
           radius={radius}
           selected={selectedId === contact.id}
           hovered={hoverId === contact.id}
+          transmitting={settings.transmitting}
+          ownHeadingDeg={ownHeadingDeg}
         />
       ))}
 
+      <OwnShipSymbol />
       <Cursor
         x={cursor.x}
         y={cursor.y}
@@ -285,6 +263,8 @@ function ContactSymbol({
   radius,
   selected,
   hovered,
+  transmitting,
+  ownHeadingDeg,
 }: {
   contact: Contact;
   track?: SensorTrack;
@@ -292,21 +272,18 @@ function ContactSymbol({
   radius: number;
   selected: boolean;
   hovered: boolean;
+  transmitting: boolean;
+  ownHeadingDeg: number;
 }) {
-  const p = nmToScreen(contact.position, rangeNm, radius);
-  const color =
-    contact.classification === "ANOMALOUS"
-      ? "#ffb347"
-      : contact.classification === "AIS"
-        ? "#9cdcff"
-        : "#7fffae";
-  const rawFade = track?.trackFile
-    ? 1
-    : Math.max(0.18, 1 - (track?.ageSeconds ?? 14) / 14);
-  const opacity = Math.max(0.14, (track?.strength ?? 0.4) * rawFade);
+  const p = worldToScope(contact.position, ownHeadingDeg, rangeNm, radius);
+  const symbolColor =
+    transmitting && (selected || contact.designated || track?.trackFile)
+      ? TRACK_YELLOW
+      : CONTACT_COLOR;
+  const opacity = 1;
   const heading = nmToScreen(
     pointFromBearingRange(
-      contact.headingDeg,
+      contact.headingDeg - ownHeadingDeg,
       Math.min(8, 1 + contact.speedKts / 6),
     ),
     rangeNm,
@@ -316,112 +293,118 @@ function ContactSymbol({
   return (
     <g transform={`translate(${p.x},${p.y})`} opacity={opacity}>
       {contact.trail.slice(1, 12).map((trail, i) => {
-        const t = nmToScreen(trail, rangeNm, radius);
+        const t = worldToScope(trail, ownHeadingDeg, rangeNm, radius);
         return (
           <circle
             key={i}
             cx={t.x - p.x}
             cy={t.y - p.y}
             r={1}
-            fill={color}
+            fill={symbolColor}
+            stroke="#020907"
+            strokeWidth={0.4}
             opacity={0.42 - i * 0.03}
           />
         );
       })}
       {track?.painted && (
-        <circle r={8} fill="none" stroke="#7fffae" strokeOpacity={0.3} />
+        <circle r={8} fill="none" stroke={CONTACT_COLOR} strokeOpacity={0.3} />
       )}
-      {track?.trackFile && (
-        <line
-          x1={0}
-          y1={0}
-          x2={heading.x}
-          y2={heading.y}
-          stroke={color}
-          strokeOpacity={0.85}
-          strokeWidth={1}
-        />
+      {symbolFor(contact, transmitting, symbolColor, {
+        tracked: Boolean(track?.trackFile || contact.designated),
+        selected,
+        heading,
+        hasHistory: contact.trail.length > 3,
+      })}
+      {transmitting && (selected || contact.designated || track?.trackFile) && (
+        <Brackets color={selected ? TRACK_YELLOW : "#dce4d6"} />
       )}
-      {symbolFor(contact.classification, color)}
-      {(selected || contact.designated) && <Brackets color={color} />}
-      {hovered && !selected && (
+      {transmitting && hovered && !selected && (
         <circle
           r={13}
           fill="none"
-          stroke={color}
+          stroke={symbolColor}
           strokeDasharray="2 2"
           opacity={0.65}
         />
-      )}
-      {(hovered || selected || track?.trackFile) && (
-        <text x={10} y={-8} fontSize={9} fill={color}>
-          {contact.id}
-        </text>
-      )}
-      {track?.trackFile && track.ageSeconds > 18 && (
-        <text x={10} y={4} fontSize={8} fill="#ffb347">
-          COAST
-        </text>
-      )}
-      {track?.cluttered && (
-        <text x={10} y={4} fontSize={8} fill="#ffb347">
-          CLTR
-        </text>
-      )}
-      {track?.merged && (
-        <text x={10} y={15} fontSize={8} fill="#ffb347">
-          MERGE
-        </text>
       )}
     </g>
   );
 }
 
-function symbolFor(classification: Contact["classification"], color: string) {
-  if (classification === "AIS")
+function symbolFor(
+  contact: Contact,
+  transmitting: boolean,
+  color: string,
+  options: {
+    tracked: boolean;
+    selected: boolean;
+    heading: { x: number; y: number };
+    hasHistory: boolean;
+  },
+) {
+  if (transmitting && contact.aisActive)
     return (
-      <rect
-        x={-5}
-        y={-5}
-        width={10}
-        height={10}
-        fill="none"
-        stroke={color}
-        strokeWidth={1.2}
+      <RadarAisSquare
+        color={options.selected || options.tracked ? TRACK_YELLOW : CONTACT_COLOR}
+        heading={options.heading}
       />
     );
-  if (classification === "ANOMALOUS")
-    return (
-      <polygon
-        points="0,-7 6,5 -6,5"
-        fill="none"
-        stroke={color}
-        strokeWidth={1.2}
-      />
-    );
-  if (classification === "EO_ID") {
-    return (
-      <g>
-        <polygon
-          points="0,-6 6,0 0,6 -6,0"
-          fill="none"
-          stroke={color}
-          strokeWidth={1.2}
-        />
-        <circle r={1.5} fill={color} />
-      </g>
-    );
+
+  if (!transmitting) {
+    return <ShieldTarget color={color} />;
   }
-  if (classification === "TRACKED")
-    return (
-      <polygon
-        points="0,-6 6,0 0,6 -6,0"
+
+  return (
+    <polygon
+      points="0,-7 6,5 -6,5"
+      fill="none"
+      stroke={color}
+      strokeWidth={1.2}
+    />
+  );
+}
+
+function ShieldTarget({ color }: { color: string }) {
+  return (
+    <path
+      d="M-8,-7 L0,-3 L8,-7 L8,6 L0,10 L-8,6 Z"
+      fill="none"
+      stroke={color}
+      strokeWidth={1.35}
+    />
+  );
+}
+
+function RadarAisSquare({
+  color,
+  heading,
+}: {
+  color: string;
+  heading: { x: number; y: number };
+}) {
+  return (
+    <g>
+      <line
+        x1={0}
+        y1={0}
+        x2={heading.x}
+        y2={heading.y}
+        stroke={color}
+        strokeOpacity={0.95}
+        strokeWidth={1.1}
+      />
+      <rect
+        x={-6}
+        y={-6}
+        width={12}
+        height={12}
         fill="none"
         stroke={color}
-        strokeWidth={1.2}
+        strokeWidth={1.4}
       />
-    );
-  return <circle r={2.4} fill={color} />;
+    </g>
+  );
 }
 
 function Brackets({ color }: { color: string }) {
@@ -464,25 +447,60 @@ function Coastline({
   points,
   rangeNm,
   radius,
+  ownHeadingDeg,
 }: {
   points: { x: number; y: number }[];
   rangeNm: number;
   radius: number;
+  ownHeadingDeg: number;
 }) {
   const path = points
     .map((point, i) => {
-      const p = nmToScreen(point, rangeNm, radius);
+      const p = worldToScope(point, ownHeadingDeg, rangeNm, radius);
       return `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
     })
     .join(" ");
   return (
     <path
-      d={`${path} Z`}
-      fill="#0a2a16"
-      fillOpacity={0.58}
-      stroke="#1f6b3a"
-      strokeWidth={0.8}
+      d={path}
+      fill="none"
+      stroke="#f2f2e7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeOpacity={0.88}
+      strokeWidth={1.4}
     />
+  );
+}
+
+function OwnShipSymbol() {
+  return (
+    <g pointerEvents="none">
+      <circle r={26} fill="none" stroke="#4cff4c" strokeWidth={1.6} />
+      <circle r={13} fill="none" stroke="#36d1ff" strokeWidth={1.1} />
+      <ellipse cx={0} cy={-1} rx={5.2} ry={19} fill="#28dffc" fillOpacity={0.86} />
+      <path
+        d="M0,-23 C5,-17 6,-8 5,-1 C4,8 2,16 0,20 C-2,16 -4,8 -5,-1 C-6,-8 -5,-17 0,-23 Z"
+        fill="#28dffc"
+        fillOpacity={0.7}
+        stroke="#8bf8ff"
+        strokeWidth={1}
+      />
+      <line x1={-25} y1={-2} x2={25} y2={-2} stroke="#8bf8ff" strokeWidth={1.7} />
+      <line x1={0} y1={-27} x2={0} y2={27} stroke="#8bf8ff" strokeWidth={1.2} />
+      <path d="M-13,2 L-25,9 M13,2 L25,9" stroke="#8bf8ff" strokeWidth={1.2} />
+      <path d="M-8,15 L-16,22 M8,15 L16,22" stroke="#8bf8ff" strokeWidth={1.1} />
+      <circle r={2.2} fill="#8bf8ff" />
+      <line
+        x1={0}
+        y1={-30}
+        x2={0}
+        y2={-44}
+        stroke="#f4e84f"
+        strokeWidth={1.5}
+      />
+      <polygon points="0,-50 5,-42 -5,-42" fill="#f4e84f" />
+    </g>
   );
 }
 
@@ -490,16 +508,18 @@ function ShippingLanes({
   scenario,
   rangeNm,
   radius,
+  ownHeadingDeg,
 }: {
   scenario: Scenario;
   rangeNm: number;
   radius: number;
+  ownHeadingDeg: number;
 }) {
   return (
     <g>
       {scenario.lanes.map((lane, i) => {
-        const a = nmToScreen(lane.a, rangeNm, radius);
-        const b = nmToScreen(lane.b, rangeNm, radius);
+        const a = worldToScope(lane.a, ownHeadingDeg, rangeNm, radius);
+        const b = worldToScope(lane.b, ownHeadingDeg, rangeNm, radius);
         return (
           <line
             key={i}
@@ -521,15 +541,17 @@ function ProtectedZones({
   scenario,
   rangeNm,
   radius,
+  ownHeadingDeg,
 }: {
   scenario: Scenario;
   rangeNm: number;
   radius: number;
+  ownHeadingDeg: number;
 }) {
   return (
     <g>
       {scenario.protectedZones.map((zone) => {
-        const p = nmToScreen(zone.center, rangeNm, radius);
+        const p = worldToScope(zone.center, ownHeadingDeg, rangeNm, radius);
         return (
           <circle
             key={zone.label}
@@ -551,15 +573,17 @@ function Weather({
   scenario,
   rangeNm,
   radius,
+  ownHeadingDeg,
 }: {
   scenario: Scenario;
   rangeNm: number;
   radius: number;
+  ownHeadingDeg: number;
 }) {
   return (
     <g>
       {scenario.rainCells.map((cell, i) => {
-        const p = nmToScreen(cell.center, rangeNm, radius);
+        const p = worldToScope(cell.center, ownHeadingDeg, rangeNm, radius);
         return (
           <circle
             key={i}
@@ -624,15 +648,39 @@ function findNearest(
   contacts: Contact[],
   rangeNm: number,
   radius: number,
+  ownHeadingDeg: number,
 ) {
   let best: { id: string; d: number } | null = null;
   for (const contact of contacts) {
-    const p = nmToScreen(contact.position, rangeNm, radius);
+    const p = worldToScope(contact.position, ownHeadingDeg, rangeNm, radius);
     const d = Math.hypot(cursor.x - p.x, cursor.y - p.y);
     if (d < ACQUISITION_GATE_PX && (!best || d < best.d))
       best = { id: contact.id, d };
   }
   return best?.id ?? null;
+}
+
+function worldToScope(
+  point: { x: number; y: number },
+  ownHeadingDeg: number,
+  rangeNm: number,
+  radius: number,
+) {
+  const { bearingDeg, rangeNm: pointRangeNm } = bearingRangeFromPoint(point);
+  return nmToScreen(
+    pointFromBearingRange(bearingDeg - ownHeadingDeg, pointRangeNm),
+    rangeNm,
+    radius,
+  );
+}
+
+function isBehindBlindLine(
+  point: { x: number; y: number },
+  ownHeadingDeg: number,
+) {
+  const { bearingDeg } = bearingRangeFromPoint(point);
+  const relativeBearing = ((bearingDeg - ownHeadingDeg + 540) % 360) - 180;
+  return Math.abs(relativeBearing) > RADAR_COVERAGE_HALF_DEG;
 }
 
 function mouseToScopePoint(event: MouseEvent<SVGSVGElement>, size: number) {

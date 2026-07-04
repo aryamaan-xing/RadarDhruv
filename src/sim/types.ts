@@ -26,6 +26,8 @@ export type VesselBehavior =
 
 export type RadarMode = "SURFACE_SEARCH" | "WEATHER" | "MTI";
 
+export type MotionRiskLevel = "LOW" | "WATCH" | "SUSPECT";
+
 export interface PointNM {
   x: number;
   y: number;
@@ -45,6 +47,8 @@ export interface Contact {
   aisEquipped: boolean;
   aisActive: boolean;
   aisReportedKind?: VesselKind;
+  aisMetadata?: AisMetadata;
+  motionAnalysis: MotionAnalysis;
   lastAisUpdateSeconds: number;
   classification: Classification;
   designated: boolean;
@@ -55,6 +59,27 @@ export interface Contact {
   detectedAtSeconds?: number;
   flaggedAtSeconds?: number;
   eoResult?: EOResult;
+}
+
+export interface AisMetadata {
+  mmsi: string;
+  vesselName: string;
+  nationality: string;
+  registryCountry: string;
+  lastPort: string;
+  nextPort: string;
+  cargo: string;
+  lengthM: number;
+  beamM: number;
+}
+
+export interface MotionAnalysis {
+  riskScore: number;
+  riskLevel: MotionRiskLevel;
+  headingChangeDeg: number;
+  routeDeviationNm: number;
+  speedKts: number;
+  reasons: string[];
 }
 
 export interface RainCell {
@@ -100,6 +125,7 @@ export interface RadarSettings {
   rangeNm: number;
   sectorCenterDeg: number;
   sectorWidthDeg: number;
+  transmitting: boolean;
   gain: number;
   seaClutter: number;
   rainClutter: number;

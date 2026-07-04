@@ -16,6 +16,7 @@ export const DEFAULT_RADAR_SETTINGS: RadarSettings = {
   rangeNm: 80,
   sectorCenterDeg: 0,
   sectorWidthDeg: 270,
+  transmitting: true,
   gain: 62,
   seaClutter: 40,
   rainClutter: 35,
@@ -24,8 +25,8 @@ export const DEFAULT_RADAR_SETTINGS: RadarSettings = {
   mode: "SURFACE_SEARCH",
 };
 
-const RAW_PAINT_PERSISTENCE_SECONDS = 14;
-const TRACK_FILE_COAST_SECONDS = 42;
+const RAW_PAINT_PERSISTENCE_SECONDS = Number.POSITIVE_INFINITY;
+const TRACK_FILE_COAST_SECONDS = Number.POSITIVE_INFINITY;
 
 export function detectContacts(
   scenario: Scenario,
@@ -77,7 +78,7 @@ export function detectContacts(
       1,
     );
     const painted =
-      inRange && inSector && crossed && strength > paintThreshold(settings);
+      inRange && inSector && strength > paintThreshold(settings) && (crossed || !old);
     const trackFile =
       contact.aisActive ||
       contact.designated ||
@@ -88,6 +89,7 @@ export function detectContacts(
       ? scenarioSeconds
       : (old?.lastPaintSeconds ??
         (trackFile && inRange && inSector ? scenarioSeconds : -999));
+    const loaded = painted || lastPaintSeconds > -999 || trackFile;
     const ageSeconds = scenarioSeconds - lastPaintSeconds;
     const persistence = trackFile
       ? TRACK_FILE_COAST_SECONDS
@@ -105,6 +107,7 @@ export function detectContacts(
       visible:
         inRange &&
         inSector &&
+        loaded &&
         !faded &&
         (trackFile ? strength > 0.12 : strength > 0.18),
       trackFile,

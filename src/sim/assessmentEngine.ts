@@ -60,7 +60,10 @@ function assessContact(
       groundTruth: contact.groundTruth,
       traineeDecision,
       outcome: "CORRECT",
-      rationale: ["Correctly flagged anomalous behavior.", ...contact.evidence],
+      rationale: [
+        "Correctly flagged anomalous behavior from motion/AIS consistency.",
+        ...contact.motionAnalysis.reasons,
+      ],
     };
   }
 
@@ -71,8 +74,8 @@ function assessContact(
       traineeDecision,
       outcome: "FALSE_POSITIVE",
       rationale: [
-        "Routine contact was escalated without enough evidence.",
-        ...contact.evidence,
+        "Routine contact was escalated without enough motion or AIS evidence.",
+        ...contact.motionAnalysis.reasons,
       ],
     };
   }
@@ -83,7 +86,10 @@ function assessContact(
       groundTruth: contact.groundTruth,
       traineeDecision,
       outcome: "MISSED_THREAT",
-      rationale: ["Suspicious behavior was not flagged.", ...contact.evidence],
+      rationale: [
+        "Suspicious motion or AIS mismatch was not flagged.",
+        ...contact.motionAnalysis.reasons,
+      ],
     };
   }
 
@@ -97,7 +103,7 @@ function assessContact(
         : "INSUFFICIENT",
     rationale: [
       "Routine contact; continued monitoring is acceptable.",
-      ...contact.evidence,
+      ...contact.motionAnalysis.reasons,
     ],
   };
 }
