@@ -24,6 +24,16 @@ export type VesselBehavior =
   | "PROTECTED_APPROACH"
   | "AIS_MISMATCH";
 
+export type VesselIntent =
+  | "NORMAL_TRANSIT"
+  | "FISHING"
+  | "LOITER"
+  | "RENDEZVOUS"
+  | "SHADOW_ROUTE"
+  | "AIS_SPOOF"
+  | "COASTAL_APPROACH"
+  | "EVASIVE_RANDOM_WALK";
+
 export type RadarMode = "SURFACE_SEARCH" | "WEATHER" | "MTI";
 
 export type MotionRiskLevel = "LOW" | "WATCH" | "SUSPECT";
@@ -44,9 +54,15 @@ export interface Contact {
   headingDeg: number;
   kind: VesselKind;
   behavior: VesselBehavior;
+  intent: VesselIntent;
+  route: PointNM[];
+  routeIndex: number;
+  desiredSpeedKts: number;
+  crossTrackDeviationNm: number;
   aisEquipped: boolean;
   aisActive: boolean;
   aisReportedKind?: VesselKind;
+  actualKind: VesselKind;
   aisMetadata?: AisMetadata;
   motionAnalysis: MotionAnalysis;
   lastAisUpdateSeconds: number;

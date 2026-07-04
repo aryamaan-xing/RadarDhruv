@@ -16,6 +16,7 @@ import type {
   Scenario,
   ShippingLane,
   VesselBehavior,
+  VesselIntent,
   VesselKind,
 } from "./types";
 
@@ -125,11 +126,14 @@ export function advanceContacts(
   return contacts.map((contact) => {
     if (contact.dropped) return contact;
 
-    const heading = nextHeading(contact, scenarioSeconds);
+    const routeState = updateRouteState(contact, scenario, scenarioSeconds);
+    const heading = routeState.headingDeg;
     const headingChangeDeg = Math.abs(shortAngleDiff(heading, contact.headingDeg));
-    const distanceNm = (contact.speedKts / 3600) * dtSeconds;
+    const speedKts = routeState.speedKts;
+    const distanceNm = (speedKts / 3600) * dtSeconds;
     let position = movePoint(contact.position, heading, distanceNm);
     let resolvedHeading = heading;
+    let routeIndex = routeState.routeIndex;
 
     if (pointInPolygon(position, scenario.coastline)) {
       resolvedHeading = normalizeDeg(heading + 180);
@@ -152,9 +156,15 @@ export function advanceContacts(
     return {
       ...contact,
       position,
+      speedKts,
       headingDeg: resolvedHeading,
+      routeIndex,
+      crossTrackDeviationNm: routeState.crossTrackDeviationNm,
       trail,
-      motionAnalysis: analyzeMotion(contact, headingChangeDeg),
+      motionAnalysis: analyzeMotion(
+        { ...contact, speedKts, crossTrackDeviationNm: routeState.crossTrackDeviationNm },
+        headingChangeDeg,
+      ),
       lastAisUpdateSeconds:
         contact.aisActive && scenarioSeconds - contact.lastAisUpdateSeconds > 35
           ? scenarioSeconds
@@ -179,7 +189,8 @@ function createContact(
     rnd,
     suspicious ? SUSPICIOUS_BEHAVIORS : ROUTINE_BEHAVIORS,
   );
-  const kind = chooseKindForBehavior(behavior, rnd);
+  const actualKind = chooseKindForBehavior(behavior, rnd);
+  const intent = intentForBehavior(behavior);
   const lane = pick(rnd, lanes);
   const along = -0.46 + rnd() * 0.92;
   const lateral = (rnd() - 0.5) * (behavior === "LOITERING" ? 30 : 9);
@@ -205,14 +216,16 @@ function createContact(
         : normalizeDeg(
             laneHeading + (rnd() > 0.5 ? 0 : 180) + (rnd() - 0.5) * 10,
           );
-  const aisEquipped = kind !== "FAST_CRAFT" && rnd() < 0.84;
+  const aisEquipped = actualKind !== "FAST_CRAFT" && rnd() < 0.84;
   const aisActive =
     aisEquipped && behavior !== "AIS_SILENT_TRANSIT" && rnd() > 0.08;
   const aisReportedKind =
-    behavior === "AIS_MISMATCH" ? pick(rnd, ROUTINE_KINDS) : kind;
-  const speedKts = speedFor(kind, behavior, rnd);
+    behavior === "AIS_MISMATCH" ? pick(rnd, ROUTINE_KINDS) : actualKind;
+  const kind = aisReportedKind ?? actualKind;
+  const speedKts = speedFor(actualKind, behavior, rnd);
+  const route = createRouteForContact(position, headingDeg, behavior, lane, rnd);
   const aisMetadata = aisActive
-    ? createAisMetadata(index, rnd, kind, aisReportedKind, behavior)
+    ? createAisMetadata(index, rnd, actualKind, aisReportedKind, behavior)
     : undefined;
   const routeDeviationNm = Math.abs(lateral);
   const motionAnalysis = initialMotionAnalysis(
@@ -220,7 +233,7 @@ function createContact(
     speedKts,
     routeDeviationNm,
     aisActive,
-    kind,
+    actualKind,
     aisReportedKind,
     aisMetadata,
   );
@@ -236,9 +249,15 @@ function createContact(
     headingDeg,
     kind,
     behavior,
+    intent,
+    route,
+    routeIndex: 1,
+    desiredSpeedKts: speedKts,
+    crossTrackDeviationNm: routeDeviationNm,
     aisEquipped,
     aisActive,
     aisReportedKind,
+    actualKind,
     aisMetadata,
     motionAnalysis,
     lastAisUpdateSeconds: 0,
@@ -264,6 +283,68 @@ function createShippingLanes(rnd: () => number): ShippingLane[] {
       b: { x: along.x + cross.x, y: along.y + cross.y },
     };
   });
+}
+
+function intentForBehavior(behavior: VesselBehavior): VesselIntent {
+  if (behavior === "FISHING_PATTERN") return "FISHING";
+  if (behavior === "LOITERING") return "LOITER";
+  if (behavior === "RENDEZVOUS") return "RENDEZVOUS";
+  if (behavior === "PROTECTED_APPROACH") return "COASTAL_APPROACH";
+  if (behavior === "AIS_MISMATCH") return "AIS_SPOOF";
+  if (behavior === "AIS_SILENT_TRANSIT") return "SHADOW_ROUTE";
+  return "NORMAL_TRANSIT";
+}
+
+function createRouteForContact(
+  position: PointNM,
+  headingDeg: number,
+  behavior: VesselBehavior,
+  lane: ShippingLane,
+  rnd: () => number,
+): PointNM[] {
+  if (behavior === "ROUTINE_TRANSIT" || behavior === "AIS_MISMATCH") {
+    const laneDx = lane.b.x - lane.a.x;
+    const laneDy = lane.b.y - lane.a.y;
+    const len = Math.hypot(laneDx, laneDy) || 1;
+    const along = ((position.x - lane.a.x) * laneDx + (position.y - lane.a.y) * laneDy) / len;
+    const forward = rnd() > 0.5 ? 1 : -1;
+    return [
+      position,
+      {
+        x: lane.a.x + (laneDx / len) * (along + forward * 35),
+        y: lane.a.y + (laneDy / len) * (along + forward * 35),
+      },
+      {
+        x: lane.a.x + (laneDx / len) * (along + forward * 95),
+        y: lane.a.y + (laneDy / len) * (along + forward * 95),
+      },
+    ];
+  }
+
+  if (behavior === "PROTECTED_APPROACH") {
+    return [position, { x: position.x * 0.55, y: Math.max(position.y, 20) }];
+  }
+
+  if (behavior === "RENDEZVOUS") {
+    return [position, { x: position.x * 0.45 + 10, y: position.y * 0.45 - 8 }];
+  }
+
+  if (behavior === "LOITERING" || behavior === "FISHING_PATTERN") {
+    const radius = behavior === "LOITERING" ? 5 : 8;
+    return Array.from({ length: 5 }).map((_, i) => {
+      const angle = (i / 5) * Math.PI * 2 + rnd() * 0.4;
+      return {
+        x: position.x + Math.cos(angle) * radius,
+        y: position.y + Math.sin(angle) * radius,
+      };
+    });
+  }
+
+  return [
+    position,
+    movePoint(position, headingDeg + (rnd() - 0.5) * 35, 45),
+    movePoint(position, headingDeg + (rnd() - 0.5) * 70, 90),
+  ];
 }
 
 function createCoastline(rnd: () => number): PointNM[] {
@@ -467,9 +548,36 @@ function analyzeMotion(contact: Contact, headingChangeDeg: number): MotionAnalys
     }
   }
 
+  if (contact.crossTrackDeviationNm > 10) {
+    riskScore = Math.min(100, riskScore + 1.4);
+    if (!reasons.some((reason) => reason.includes("Cross-track deviation"))) {
+      reasons.unshift("Cross-track deviation from expected route is increasing.");
+    }
+  }
+
+  if (Math.abs(contact.speedKts - contact.desiredSpeedKts) > 3.5) {
+    riskScore = Math.min(100, riskScore + 1);
+    if (!reasons.some((reason) => reason.includes("Speed changes"))) {
+      reasons.unshift("Speed changes are inconsistent with steady merchant transit.");
+    }
+  }
+
+  if (
+    contact.intent === "AIS_SPOOF" &&
+    contact.aisActive &&
+    contact.aisReportedKind !== contact.actualKind
+  ) {
+    riskScore = Math.min(100, riskScore + 1);
+    if (!reasons.some((reason) => reason.includes("AIS identity"))) {
+      reasons.unshift("AIS identity is plausible, but motion does not match the declared vessel.");
+    }
+  }
+
   return {
     ...contact.motionAnalysis,
     headingChangeDeg,
+    routeDeviationNm: contact.crossTrackDeviationNm,
+    speedKts: contact.speedKts,
     riskScore,
     riskLevel: riskLevel(riskScore),
     reasons: reasons.slice(0, 5),
@@ -480,6 +588,73 @@ function riskLevel(score: number): MotionRiskLevel {
   if (score >= 55) return "SUSPECT";
   if (score >= 25) return "WATCH";
   return "LOW";
+}
+
+function updateRouteState(
+  contact: Contact,
+  scenario: Scenario,
+  scenarioSeconds: number,
+) {
+  const route = contact.route.length > 1 ? contact.route : [contact.position];
+  let routeIndex = Math.min(contact.routeIndex, route.length - 1);
+  let waypoint = route[routeIndex] ?? contact.position;
+  let toWaypoint = bearingRangeFromPoint({
+    x: waypoint.x - contact.position.x,
+    y: waypoint.y - contact.position.y,
+  });
+
+  if (toWaypoint.rangeNm < 1.2 && route.length > 1) {
+    routeIndex = (routeIndex + 1) % route.length;
+    waypoint = route[routeIndex] ?? waypoint;
+    toWaypoint = bearingRangeFromPoint({
+      x: waypoint.x - contact.position.x,
+      y: waypoint.y - contact.position.y,
+    });
+  }
+
+  const routeDeviationNm = distanceToRoute(contact.position, route);
+  const phase = Number(contact.id.slice(1)) || contact.id.length;
+  let headingDeg = toWaypoint.rangeNm > 0.1 ? toWaypoint.bearingDeg : contact.headingDeg;
+  let speedKts = contact.desiredSpeedKts;
+
+  if (contact.intent === "NORMAL_TRANSIT") {
+    headingDeg += Math.sin(scenarioSeconds / 70 + phase) * 0.6;
+  } else if (contact.intent === "FISHING") {
+    headingDeg += Math.sin(scenarioSeconds / 16 + phase) * 12;
+    speedKts = Math.max(2, contact.desiredSpeedKts * 0.55);
+  } else if (contact.intent === "LOITER") {
+    headingDeg += Math.sin(scenarioSeconds / 11 + phase) * 18;
+    speedKts = Math.max(1.5, contact.desiredSpeedKts * 0.45);
+  } else if (contact.intent === "RENDEZVOUS") {
+    headingDeg += Math.sin(scenarioSeconds / 22 + phase) * 7;
+    speedKts = contact.desiredSpeedKts + Math.sin(scenarioSeconds / 18) * 2.8;
+  } else if (contact.intent === "AIS_SPOOF") {
+    headingDeg += Math.sin(scenarioSeconds / 18 + phase) * 9;
+    speedKts = contact.desiredSpeedKts + Math.sin(scenarioSeconds / 25 + phase) * 3.4;
+  } else if (contact.intent === "COASTAL_APPROACH") {
+    const zone = scenario.protectedZones[0];
+    if (zone) {
+      const toZone = bearingRangeFromPoint({
+        x: zone.center.x - contact.position.x,
+        y: zone.center.y - contact.position.y,
+      });
+      headingDeg = toZone.bearingDeg + Math.sin(scenarioSeconds / 20 + phase) * 5;
+    }
+  } else if (contact.intent === "SHADOW_ROUTE") {
+    headingDeg += 10 + Math.sin(scenarioSeconds / 24 + phase) * 5;
+  } else if (contact.intent === "EVASIVE_RANDOM_WALK") {
+    headingDeg +=
+      Math.sin(scenarioSeconds / 9 + phase) * 16 +
+      Math.sin(scenarioSeconds / 27 + phase) * 9;
+    speedKts = contact.desiredSpeedKts + Math.sin(scenarioSeconds / 14 + phase) * 4;
+  }
+
+  return {
+    headingDeg: normalizeDeg(headingDeg),
+    speedKts: Math.max(1, speedKts),
+    routeIndex,
+    crossTrackDeviationNm: routeDeviationNm,
+  };
 }
 
 function nextHeading(contact: Contact, scenarioSeconds: number) {
@@ -539,6 +714,28 @@ function evidenceFor(
 
 function pick<T>(rnd: () => number, values: T[]) {
   return values[Math.floor(rnd() * values.length)];
+}
+
+function distanceToRoute(point: PointNM, route: PointNM[]) {
+  if (route.length < 2) return 0;
+  return Math.min(
+    ...route.slice(1).map((end, index) => {
+      const start = route[index];
+      return distanceToSegment(point, start, end);
+    }),
+  );
+}
+
+function distanceToSegment(point: PointNM, start: PointNM, end: PointNM) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy || 1;
+  const t = clamp(
+    ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared,
+    0,
+    1,
+  );
+  return Math.hypot(point.x - (start.x + dx * t), point.y - (start.y + dy * t));
 }
 
 function pointInPolygon(point: PointNM, polygon: PointNM[]) {
