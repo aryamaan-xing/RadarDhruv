@@ -21,6 +21,8 @@ import type {
 } from "./types";
 
 const CONTACT_COUNT = 34;
+const SHORELINE_AVOIDANCE_NM = 9;
+const SHORELINE_LOOKAHEAD_SECONDS = 180;
 
 const ROUTINE_KINDS: VesselKind[] = [
   "FISHING",
@@ -99,7 +101,7 @@ export function createInitialScenario(seed = 20260601): Scenario {
       lon: "074°06.8'E",
       headingDeg: 284,
       speedKts: 120,
-      altitudeFt: 1200,
+      altitudeFt: 10000,
     },
     contacts,
     coastline: createCoastline(rnd),
@@ -136,7 +138,13 @@ export function advanceContacts(
     let routeIndex = routeState.routeIndex;
 
     if (pointInPolygon(position, scenario.coastline)) {
-      resolvedHeading = normalizeDeg(heading + 180);
+      resolvedHeading = coastAvoidanceHeading(
+        contact.position,
+        heading,
+        speedKts,
+        scenario.coastline,
+        1,
+      );
       position = movePoint(contact.position, resolvedHeading, distanceNm);
       if (pointInPolygon(position, scenario.coastline)) {
         position = contact.position;
@@ -649,6 +657,13 @@ function updateRouteState(
     speedKts = contact.desiredSpeedKts + Math.sin(scenarioSeconds / 14 + phase) * 4;
   }
 
+  headingDeg = coastAvoidanceHeading(
+    contact.position,
+    headingDeg,
+    speedKts,
+    scenario.coastline,
+  );
+
   return {
     headingDeg: normalizeDeg(headingDeg),
     speedKts: Math.max(1, speedKts),
@@ -716,6 +731,64 @@ function pick<T>(rnd: () => number, values: T[]) {
   return values[Math.floor(rnd() * values.length)];
 }
 
+function coastAvoidanceHeading(
+  position: PointNM,
+  headingDeg: number,
+  speedKts: number,
+  coastline: PointNM[],
+  force = 0,
+) {
+  const lookaheadNm = clamp(
+    (speedKts / 3600) * SHORELINE_LOOKAHEAD_SECONDS,
+    2.5,
+    8,
+  );
+  const projected = movePoint(position, headingDeg, lookaheadNm);
+  const currentNearest = nearestShorelinePoint(position, coastline);
+  const projectedNearest = nearestShorelinePoint(projected, coastline);
+  const closingLand =
+    pointInPolygon(projected, coastline) ||
+    projectedNearest.distanceNm < SHORELINE_AVOIDANCE_NM;
+  const currentClose = currentNearest.distanceNm < SHORELINE_AVOIDANCE_NM;
+
+  if (!closingLand && !currentClose && force === 0) return headingDeg;
+
+  const nearest =
+    projectedNearest.distanceNm < currentNearest.distanceNm
+      ? projectedNearest
+      : currentNearest;
+  const away = bearingRangeFromPoint({
+    x: position.x - nearest.point.x,
+    y: position.y - nearest.point.y,
+  });
+  const proximity = clamp(
+    (SHORELINE_AVOIDANCE_NM - nearest.distanceNm) / SHORELINE_AVOIDANCE_NM,
+    0,
+    1,
+  );
+  const strength = clamp(
+    Math.max(force, pointInPolygon(projected, coastline) ? 0.85 : proximity),
+    0,
+    1,
+  );
+
+  return normalizeDeg(
+    headingDeg + shortAngleDiff(away.bearingDeg, headingDeg) * strength,
+  );
+}
+
+function nearestShorelinePoint(point: PointNM, coastline: PointNM[]) {
+  const shoreline = coastline.slice(0, Math.max(2, coastline.length - 2));
+  let nearest = { point: shoreline[0] ?? point, distanceNm: Number.POSITIVE_INFINITY };
+
+  for (let i = 0; i < shoreline.length - 1; i++) {
+    const candidate = nearestPointOnSegment(point, shoreline[i], shoreline[i + 1]);
+    if (candidate.distanceNm < nearest.distanceNm) nearest = candidate;
+  }
+
+  return nearest;
+}
+
 function distanceToRoute(point: PointNM, route: PointNM[]) {
   if (route.length < 2) return 0;
   return Math.min(
@@ -736,6 +809,22 @@ function distanceToSegment(point: PointNM, start: PointNM, end: PointNM) {
     1,
   );
   return Math.hypot(point.x - (start.x + dx * t), point.y - (start.y + dy * t));
+}
+
+function nearestPointOnSegment(point: PointNM, start: PointNM, end: PointNM) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy || 1;
+  const t = clamp(
+    ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared,
+    0,
+    1,
+  );
+  const nearest = { x: start.x + dx * t, y: start.y + dy * t };
+  return {
+    point: nearest,
+    distanceNm: Math.hypot(point.x - nearest.x, point.y - nearest.y),
+  };
 }
 
 function pointInPolygon(point: PointNM, polygon: PointNM[]) {

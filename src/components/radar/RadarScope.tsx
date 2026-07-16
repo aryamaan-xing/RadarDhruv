@@ -3,6 +3,7 @@ import type { MouseEvent } from "react";
 import {
   bearingRangeFromPoint,
   nmToScreen,
+  normalizeDeg,
   padBearing,
   pointFromBearingRange,
   screenToBearingRange,
@@ -69,12 +70,16 @@ export function RadarScope({
     1,
     radius,
   );
-  const cursorBR = screenToBearingRange(
+  const cursorRelativeBR = screenToBearingRange(
     cursor.x,
     cursor.y,
     settings.rangeNm,
     radius,
   );
+  const cursorBR = {
+    ...cursorRelativeBR,
+    bearingDeg: normalizeDeg(cursorRelativeBR.bearingDeg + ownHeadingDeg),
+  };
   const nearestId = useMemo(
     () =>
       findNearest(cursor, visibleContacts, settings.rangeNm, radius, ownHeadingDeg),
@@ -156,10 +161,10 @@ export function RadarScope({
       {Array.from({ length: 36 }).map((_, i) => {
         const deg = i * 10;
         const p1 = pointFromBearingRange(
-          deg,
+          deg - ownHeadingDeg,
           settings.rangeNm * (i % 3 === 0 ? 0.94 : 0.975),
         );
-        const p2 = pointFromBearingRange(deg, settings.rangeNm);
+        const p2 = pointFromBearingRange(deg - ownHeadingDeg, settings.rangeNm);
         const a = nmToScreen(p1, settings.rangeNm, radius);
         const b = nmToScreen(p2, settings.rangeNm, radius);
         return (
@@ -178,7 +183,7 @@ export function RadarScope({
       {Array.from({ length: 12 }).map((_, i) => {
         const deg = i * 30;
         const p = nmToScreen(
-          pointFromBearingRange(deg, settings.rangeNm * 0.9),
+          pointFromBearingRange(deg - ownHeadingDeg, settings.rangeNm * 0.9),
           settings.rangeNm,
           radius,
         );
@@ -243,15 +248,11 @@ export function RadarScope({
         bearing={cursorBR.bearingDeg}
         range={cursorBR.rangeNm}
       />
-      <text
-        x={0}
-        y={-radius - 10}
-        fill="#7fffae"
-        fontSize={11}
-        textAnchor="middle"
-      >
-        N
-      </text>
+      <NorthMarker
+        ownHeadingDeg={ownHeadingDeg}
+        rangeNm={settings.rangeNm}
+        radius={radius}
+      />
     </svg>
   );
 }
@@ -440,6 +441,33 @@ function Cursor({
         B{padBearing(bearing)} R{range.toFixed(1)}NM
       </text>
     </g>
+  );
+}
+
+function NorthMarker({
+  ownHeadingDeg,
+  rangeNm,
+  radius,
+}: {
+  ownHeadingDeg: number;
+  rangeNm: number;
+  radius: number;
+}) {
+  const p = nmToScreen(
+    pointFromBearingRange(-ownHeadingDeg, rangeNm * 0.98),
+    rangeNm,
+    radius,
+  );
+  return (
+    <text
+      x={p.x}
+      y={p.y + 4}
+      fill="#7fffae"
+      fontSize={11}
+      textAnchor="middle"
+    >
+      N
+    </text>
   );
 }
 

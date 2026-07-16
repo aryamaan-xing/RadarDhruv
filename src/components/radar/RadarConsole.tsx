@@ -24,7 +24,7 @@ import type {
   TraineeAction,
 } from "@/sim/types";
 
-const TIME_SCALE = 180;
+const TIME_SCALE = 45;
 const DEFAULT_SIZE = 720;
 
 export function RadarConsole() {
@@ -728,15 +728,49 @@ function HeadingInput({
   value: number;
   onChange: (value: number) => void;
 }) {
+  const [draft, setDraft] = useState(String(Math.round(value)));
+  const [editing, setEditing] = useState(false);
+
+  useEffect(() => {
+    if (!editing) setDraft(String(Math.round(value)));
+  }, [editing, value]);
+
+  const commitDraft = () => {
+    setEditing(false);
+    if (draft.trim() === "") {
+      setDraft(String(Math.round(value)));
+      return;
+    }
+    const next = Number(draft);
+    if (!Number.isFinite(next)) {
+      setDraft(String(Math.round(value)));
+      return;
+    }
+    const normalized = next === 360 ? 360 : ((next % 360) + 360) % 360;
+    onChange(normalized);
+    setDraft(String(Math.round(normalized)));
+  };
+
   return (
     <label className="flex items-center gap-1 text-[#2f7a4e]">
       HEADING
       <input
-        type="number"
-        step={1}
-        value={Math.round(value)}
+        type="text"
+        inputMode="numeric"
+        value={editing ? draft : String(Math.round(value))}
+        onFocus={() => {
+          setEditing(true);
+          setDraft(String(Math.round(value)));
+        }}
         onChange={(event) => {
-          const next = Number(event.target.value);
+          const raw = event.target.value;
+          if (raw === "") {
+            setDraft("");
+            return;
+          }
+          if (!/^\d{0,4}$/.test(raw)) return;
+          setDraft(raw);
+          const next = Number(raw);
           if (!Number.isFinite(next)) return;
           if (next < 0) {
             onChange(360);
@@ -747,6 +781,12 @@ function HeadingInput({
             return;
           }
           onChange(next);
+        }}
+        onBlur={commitDraft}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.currentTarget.blur();
+          }
         }}
         className="w-16 border border-[#0e3a20] bg-[#02100a] px-1 text-[#7fffae]"
       />
